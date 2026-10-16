@@ -27,16 +27,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     )
     private let overlayController = ScreenOverlayController()
     private lazy var focusPanel = FocusPanelController(clock: clock)
+    private let threadFeed = T3ThreadFeed()
+    private lazy var threadPanel = ThreadStatusPanelController(feed: threadFeed)
     private var isOverlayShown = false
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let pauseMenuItem = NSMenuItem()
     private let breakMenuItem = NSMenuItem()
     private let statusMenuItem = NSMenuItem()
+    private let threadAccessMenuItem = NSMenuItem(title: "Re-enable T3 Thread Status", action: nil, keyEquivalent: "")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMenuBar()
         overlayController.prepare()
         focusPanel.start()
+        threadPanel.start()
         clock.onChange = { [weak self] in self?.clockChanged() }
         clockChanged()
     }
@@ -65,6 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         breakMenuItem.target = self
         breakMenuItem.action = #selector(toggleBreak)
         statusMenuItem.isEnabled = false
+        threadAccessMenuItem.target = self
+        threadAccessMenuItem.action = #selector(reenableThreadAccess)
+        threadAccessMenuItem.toolTip = "T3 revoked miced's read-only session. Issue a new one."
 
         let menu = NSMenu()
         menu.delegate = self
@@ -72,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(breakMenuItem)
         menu.addItem(.separator())
         menu.addItem(statusMenuItem)
+        menu.addItem(threadAccessMenuItem)
 
         statusItem.menu = menu
     }
@@ -80,10 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let left = formatClock(clock.remaining)
         statusMenuItem.title = clock.isPaused ? "Paused · \(left) of focus left"
             : clock.isResting ? "On a break · \(left)" : "Next break in \(left)"
+        threadAccessMenuItem.isHidden = threadFeed.state != .revoked
     }
 
     @objc private func togglePause() { clock.togglePause() }
     @objc private func toggleBreak() { clock.isResting ? clock.startFocus() : clock.startBreak() }
+    @objc private func reenableThreadAccess() { threadFeed.reenableAccess() }
 }
 
 struct DimmerSchedule {

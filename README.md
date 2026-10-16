@@ -22,6 +22,63 @@ going after a relaunch or reinstall. Time with the Mac asleep or the displays
 off counts as a break, so waking the Mac never starts with a black screen.
 Pausing during a break ends the break. No macOS privacy permissions are needed.
 
+## T3 thread status
+
+The top-right corner of the main display shows the T3 Code threads that are
+still in motion, one small floating card each, on a faint 20% tint with no blur,
+so what is behind them stays visible. The white text has a thin dark outline so
+it reads on light and dark content alike. Each card has a status dot on the left
+and, on the right, the thread name and a short status line (with how long it has
+been working):
+
+- **blue**: working, queued or starting (the dot breathes)
+- **gray**: waiting, on a subagent, monitor or background task that will wake
+  it, or on you for an approval or an answer (its own or a subagent's); the
+  status line says which
+
+Only threads in motion appear, needs-you first, then in the order of T3's
+Working section (the last message you sent, newest first). This follows T3's
+own rules (`isThreadWorking` and `shellRuntime` in T3's client runtime):
+finished, idle, failed, interrupted and cancelled threads are left out even when
+pinned, as are threads whose only leftover is a command such as a dev server.
+Settled threads stay hidden, and leftover background-task records cannot make
+a cancelled or interrupted thread appear to be waiting.
+Subagent threads are not listed; a subagent waiting on you marks the thread
+above it. Up to 8 cards are shown. When nothing is in motion the corner is
+empty.
+
+Hovering a card deepens its tint slightly (to about 28%) and swaps the status
+line for the project and what the thread is waiting on. About 3 seconds after
+the pointer leaves the corner, the text softens to about half strength and the
+tint to about 12%; the dots stay. Moving the pointer back, or a thread changing
+state, brings them back. Cards slide in, out and into their new places; with
+Reduce Motion on they cross-fade instead and the dot does not breathe. The cards
+stay on every Space and over full-screen apps, ignore clicks, never take focus,
+and sit under the break overlay.
+
+The status comes live from the T3 Code server on this Mac
+(`~/.t3/userdata/server-runtime.json`) through the `orchestration.subscribeShell`
+stream, the same one T3's sidebar uses; transcripts are never read. If T3 is not
+running or the connection drops, a single **T3 offline** card with a hollow dot
+replaces the threads instead of old dots, and the feed reconnects on its own.
+
+On first launch miced asks the T3 CLI for a read-only session
+(`t3 auth session issue --scope orchestration:read`, labelled "miced thread
+status (read-only)", valid 30 days) and keeps it in the login keychain under
+`com.codetorso.miced.t3-thread-status`. It renews it three days before it
+expires and revokes the replaced session only after the new one is saved. If
+the keychain cannot save a new session, miced revokes that new session, keeps
+the old one, and shows the error instead of retrying in a loop.
+
+The session appears in T3 under **Settings → Connections**. If you revoke it
+there (or T3 otherwise refuses it before it expires), miced treats that as
+final: a **T3 access revoked** card shows, the feed stops, and no new session is
+issued, even after miced restarts. The refused session stays in the keychain,
+marked as rejected. To turn the panel back on, choose **Re-enable T3 Thread
+Status** in the `Dim` menu (it appears only in this state); miced then issues
+one new read-only session. A token refused after its expiry date is renewed
+automatically.
+
 ## Build and run
 
 ```sh
