@@ -5,17 +5,22 @@
 Native macOS screen-break app, based on the Screen Dimmer app copied from
 `/Users/codetorso/Desktop/hello-world`.
 
-Every 20 minutes the screen goes black on every display for 50 seconds. Pause or
-resume breaks from the `Dim` menu-bar item or from the focus card.
+Every 20 minutes the screen goes black on every display for 50 seconds.
 
-## Focus card
+## Focus pill
 
-Rest the pointer in the right edge of the main display (the right 280 points,
-below the menu bar) and a small card appears in the top-right corner after a
-short delay. It shows the focus countdown to the next break, the time left
-during a break, or that breaks are paused, plus a Pause/Resume button. It hides
-again when the pointer leaves that area. The card follows the system light or
-dark appearance and needs no macOS privacy permissions.
+A small pill in the bottom-right corner of the main display shows the time to
+the next break, with a cat. Hover it and it grows into a card with:
+
+- **Focus | Break** to start a break now or end one early
+- **Pause / Resume**: resuming continues the countdown where it stopped
+- the countdown, with the cat walking toward the break (or napping during one)
+
+The same actions are in the `Dim` menu-bar item. The state survives restarts:
+a paused timer stays paused with its time left, and a running countdown keeps
+going after a relaunch or reinstall. Time with the Mac asleep or the displays
+off counts as a break, so waking the Mac never starts with a black screen.
+Pausing during a break ends the break. No macOS privacy permissions are needed.
 
 ## Build and run
 
@@ -24,9 +29,7 @@ swift build -c release
 .build/release/screen-dimmer
 ```
 
-Use `--preview-break` to show a five-second break immediately, and
-`--preview-panel` to keep the focus card open without hovering. Stop the
-installed login item before running a second copy.
+Stop the installed login item before running a second copy.
 
 ## Install
 

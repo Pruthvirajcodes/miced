@@ -16,143 +16,74 @@ struct ScreenDimmerApp {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
-    private enum Preferences {
-        static let isDimmingEnabledKey = "isDimmingEnabled"
-        // Existing installs stored settings under the bare executable name;
-        // pin the domain so a bundle ID change never resets them.
-        nonisolated(unsafe) static let store = UserDefaults(suiteName: "screen-dimmer") ?? .standard
-    }
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    // Existing installs stored settings under the bare executable name;
+    // pin the domain so a bundle ID change never resets them.
+    private let store = UserDefaults(suiteName: "screen-dimmer") ?? .standard
 
-    private let schedule = DimmerSchedule(
-        interval: 20 * 60,
-        visibleDuration: 50
+    private lazy var clock = BreakClock(
+        schedule: DimmerSchedule(interval: 20 * 60, visibleDuration: 50),
+        store: store
     )
-
     private let overlayController = ScreenOverlayController()
-    private lazy var focusPanel = FocusPanelController(schedule: schedule) { [weak self] in
-        self?.toggleDimming()
-    }
+    private lazy var focusPanel = FocusPanelController(clock: clock)
+    private var isOverlayShown = false
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    private let toggleMenuItem = NSMenuItem()
+    private let pauseMenuItem = NSMenuItem()
+    private let breakMenuItem = NSMenuItem()
     private let statusMenuItem = NSMenuItem()
-    private var dimmingTask: Task<Void, Never>?
-    private var isDimmingEnabled: Bool
-
-    override init() {
-        if Preferences.store.object(forKey: Preferences.isDimmingEnabledKey) == nil {
-            isDimmingEnabled = true
-        } else {
-            isDimmingEnabled = Preferences.store.bool(forKey: Preferences.isDimmingEnabledKey)
-        }
-
-        super.init()
-    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureMenuBar()
         overlayController.prepare()
         focusPanel.start()
-
-        // A short preview exercises the real overlay without waiting 20 minutes.
-        if CommandLine.arguments.contains("--preview-break") {
-            overlayController.show()
-            Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(5))
-                self?.overlayController.hide()
-            }
-        }
-
-        if isDimmingEnabled {
-            startDimmingSchedule()
-        }
-
-        // Shows the hover card without hovering, for visual checks.
-        if CommandLine.arguments.contains("--preview-panel") {
-            focusPanel.pin()
-        }
+        clock.onChange = { [weak self] in self?.clockChanged() }
+        clockChanged()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        stopDimmingSchedule()
         overlayController.hide()
     }
 
-    @objc
-    private func toggleDimming() {
-        isDimmingEnabled.toggle()
-        Preferences.store.set(isDimmingEnabled, forKey: Preferences.isDimmingEnabledKey)
-
-        if isDimmingEnabled {
-            startDimmingSchedule()
-        } else {
-            stopDimmingSchedule()
-            overlayController.hide()
+    private func clockChanged() {
+        let wantsOverlay = clock.isResting
+        if wantsOverlay != isOverlayShown {
+            isOverlayShown = wantsOverlay
+            wantsOverlay ? overlayController.show() : overlayController.hide()
         }
-
-        updateMenuBar()
+        focusPanel.refresh()
+        pauseMenuItem.title = clock.isPaused ? "Resume Breaks" : "Pause Breaks"
+        breakMenuItem.title = clock.isResting ? "Back to Work" : "Take a Break Now"
     }
 
     private func configureMenuBar() {
         statusItem.button?.title = "Dim"
         statusItem.button?.toolTip = "Screen Dimmer"
 
-        toggleMenuItem.target = self
-        toggleMenuItem.action = #selector(toggleDimming)
-
+        pauseMenuItem.target = self
+        pauseMenuItem.action = #selector(togglePause)
+        breakMenuItem.target = self
+        breakMenuItem.action = #selector(toggleBreak)
         statusMenuItem.isEnabled = false
 
         let menu = NSMenu()
-        menu.addItem(toggleMenuItem)
+        menu.delegate = self
+        menu.addItem(pauseMenuItem)
+        menu.addItem(breakMenuItem)
         menu.addItem(.separator())
         menu.addItem(statusMenuItem)
 
         statusItem.menu = menu
-        updateMenuBar()
     }
 
-    private func updateMenuBar() {
-        toggleMenuItem.title = isDimmingEnabled ? "Turn Dimming Off" : "Turn Dimming On"
-        toggleMenuItem.state = isDimmingEnabled ? .on : .off
-        statusMenuItem.title = isDimmingEnabled ? "Status: dimming enabled" : "Status: paused"
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let left = formatClock(clock.remaining)
+        statusMenuItem.title = clock.isPaused ? "Paused · \(left) of focus left"
+            : clock.isResting ? "On a break · \(left)" : "Next break in \(left)"
     }
 
-    private func startDimmingSchedule() {
-        guard dimmingTask == nil else {
-            return
-        }
-
-        dimmingTask?.cancel()
-        dimmingTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            while !Task.isCancelled {
-                focusPanel.phase = .focus(until: Date(timeIntervalSinceNow: schedule.interval))
-                try? await Task.sleep(for: .seconds(schedule.interval))
-
-                guard !Task.isCancelled else {
-                    return
-                }
-
-                overlayController.show()
-                focusPanel.phase = .onBreak(until: Date(timeIntervalSinceNow: schedule.visibleDuration))
-
-                try? await Task.sleep(for: .seconds(schedule.visibleDuration))
-
-                guard !Task.isCancelled else {
-                    return
-                }
-
-                overlayController.hide()
-            }
-        }
-    }
-
-    private func stopDimmingSchedule() {
-        dimmingTask?.cancel()
-        dimmingTask = nil
-        focusPanel.phase = .paused
-    }
+    @objc private func togglePause() { clock.togglePause() }
+    @objc private func toggleBreak() { clock.isResting ? clock.startFocus() : clock.startBreak() }
 }
 
 struct DimmerSchedule {
@@ -160,10 +91,116 @@ struct DimmerSchedule {
     let visibleDuration: TimeInterval
 }
 
-enum BreakPhase {
-    case paused
-    case focus(until: Date)
-    case onBreak(until: Date)
+func formatClock(_ seconds: TimeInterval) -> String {
+    let total = Int(seconds.rounded(.up))
+    return String(format: "%d:%02d", total / 60, total % 60)
+}
+
+/// The focus/break cycle. Pausing keeps the focus countdown where it was, and
+/// the state survives relaunches (login, reinstall, crash) via `store`.
+@MainActor
+final class BreakClock: NSObject {
+    enum Phase { case focus, rest }
+
+    private enum Keys {
+        static let running = "isDimmingEnabled"
+        static let pausedRemaining = "pausedRemaining"
+        static let focusEndsAt = "focusEndsAt"
+    }
+
+    let schedule: DimmerSchedule
+    var onChange: (() -> Void)?
+    private(set) var phase = Phase.focus
+    private(set) var isPaused = false
+    private var deadline = Date()
+    private var pausedRemaining: TimeInterval = 0
+    private var timer: Timer?
+    private var awaySince: Date?
+    private let store: UserDefaults
+
+    init(schedule: DimmerSchedule, store: UserDefaults) {
+        self.schedule = schedule
+        self.store = store
+        super.init()
+
+        if store.object(forKey: Keys.running) != nil && !store.bool(forKey: Keys.running) {
+            isPaused = true
+            let saved = store.double(forKey: Keys.pausedRemaining)
+            pausedRemaining = saved > 0 ? min(saved, schedule.interval) : schedule.interval
+        } else {
+            let left = store.double(forKey: Keys.focusEndsAt) - Date().timeIntervalSince1970
+            run(.focus, for: left > 0 && left <= schedule.interval ? left : schedule.interval)
+        }
+
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            center.addObserver(self, selector: #selector(wentAway), name: name, object: nil)
+        }
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            center.addObserver(self, selector: #selector(cameBack), name: name, object: nil)
+        }
+    }
+
+    var isResting: Bool { phase == .rest && !isPaused }
+    var remaining: TimeInterval { isPaused ? pausedRemaining : max(0, deadline.timeIntervalSinceNow) }
+    var duration: TimeInterval { phase == .focus ? schedule.interval : schedule.visibleDuration }
+
+    func togglePause() { isPaused ? resume() : pause() }
+
+    func pause() {
+        guard !isPaused else { return }
+        // Pausing ends a break; a focus countdown keeps its place.
+        pausedRemaining = phase == .focus ? remaining : schedule.interval
+        phase = .focus
+        isPaused = true
+        timer?.invalidate()
+        changed()
+    }
+
+    func resume() {
+        guard isPaused else { return }
+        run(.focus, for: pausedRemaining)
+    }
+
+    func startFocus() { run(.focus, for: schedule.interval) }
+    func startBreak() { run(.rest, for: schedule.visibleDuration) }
+
+    private func run(_ newPhase: Phase, for seconds: TimeInterval) {
+        phase = newPhase
+        isPaused = false
+        deadline = Date(timeIntervalSinceNow: seconds)
+        timer?.invalidate()
+        let timer = Timer(fire: deadline, interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.phaseEnded() }
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        changed()
+    }
+
+    private func phaseEnded() {
+        // Nobody is looking at a sleeping display, so that break is skipped.
+        if phase == .focus && awaySince == nil { startBreak() } else { startFocus() }
+    }
+
+    @objc private func wentAway() {
+        if awaySince == nil { awaySince = Date() }
+    }
+
+    @objc private func cameBack() {
+        guard let awaySince else { return }
+        self.awaySince = nil
+        // Time away from the screen counts as a break.
+        if !isPaused && Date().timeIntervalSince(awaySince) >= schedule.visibleDuration { startFocus() }
+    }
+
+    private func changed() {
+        store.set(!isPaused, forKey: Keys.running)
+        store.set(isPaused ? pausedRemaining : 0, forKey: Keys.pausedRemaining)
+        store.set(!isPaused && phase == .focus ? deadline.timeIntervalSince1970 : 0, forKey: Keys.focusEndsAt)
+        onChange?()
+    }
 }
 
 @MainActor
